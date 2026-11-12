@@ -51,6 +51,8 @@ const S = {
   // ephemeral session-only memory (never written to localStorage or disk)
   creds: { anthropic: { token: '', baseUrl: '' }, openai: { token: '', baseUrl: '' }, gemini: { token: '', baseUrl: '' } },
   lastReport: null,
+  lastDetectKey: '',
+  detectInFlight: false,
 };
 
 const SILENCE_MS = 3000;
@@ -135,10 +137,15 @@ document.addEventListener('DOMContentLoaded', () => {
   $('model-select').addEventListener('change', () => { clearSetupError(); onModelChange(); });
   $('custom-model').addEventListener('input', () => { clearSetupError(); syncModelPlaceholders(); });
   $('api-token').addEventListener('input', () => { clearSetupError(); saveInMemoryCreds(); });
+  $('api-token').addEventListener('change', () => detectProfile(false));
   $('base-url').addEventListener('input', saveInMemoryCreds);
   $('btn-toggle-token').addEventListener('click', toggleTokenVisibility);
   $('resume-text').addEventListener('input', () => { clearSetupError(); updateWordCounts(); });
+  $('resume-text').addEventListener('change', () => detectProfile(false));
   $('job-description').addEventListener('input', () => { clearSetupError(); updateWordCounts(); });
+  $('job-description').addEventListener('change', () => detectProfile(false));
+  $('calibration-panel').addEventListener('toggle', () => { if ($('calibration-panel').open) detectProfile(false); });
+  $('btn-detect-profile').addEventListener('click', () => detectProfile(true));
   $('btn-engage').addEventListener('click', engage);
   $('audio-mode').addEventListener('change', refreshVoiceSelect);
   $('btn-mic').addEventListener('click', toggleMic);
@@ -364,6 +371,7 @@ function applyResumeText(fileName, text) {
   $('resume-text').value = text;
   $('dz-file').textContent = `✓ ${fileName}`;
   updateWordCounts();
+  detectProfile(false);
 }
 
 async function parseResume(file) {
@@ -445,6 +453,74 @@ function clearSetupError() {
   if (el) el.classList.add('hidden');
 }
 
+function validateHttpsBaseUrl(baseUrl) {
+  if (!baseUrl) return true;
+  try {
+    if (new URL(baseUrl).protocol !== 'https:') throw new Error('Custom Base URL must start with https://.');
+    return true;
+  } catch (e) {
+    $('base-url').focus();
+    showSetupError(e.message && e.message.startsWith('Custom Base URL') ? e.message : 'Invalid Base URL (expected https://...).');
+    return false;
+  }
+}
+
+async function detectProfile(explicit = false) {
+  const resume = $('resume-text').value.trim();
+  const jd = $('job-description').value.trim();
+  const model = selectedModel();
+  const apiToken = $('api-token').value.trim();
+  const baseUrl = $('base-url').value.trim();
+
+  if (!explicit) {
+    if (!$('calibration-panel').open || !apiToken || (!resume && !jd)) return;
+    if ($('candidate-name').value.trim() && $('role-title').value.trim()) return;
+  } else {
+    clearSetupError();
+    if (!resume && !jd) { $('resume-text').focus(); return showSetupError('Upload or paste your resume or job posting first.'); }
+    if (!model) { $('custom-model').focus(); return showSetupError('Please enter a model ID.'); }
+    if (!apiToken) { $('api-token').focus(); return showSetupError('Enter your API token to auto-detect name & role via LLM.'); }
+    if (!validateHttpsBaseUrl(baseUrl)) return;
+  }
+
+  const detectKey = `${model}|${baseUrl}|${resume.slice(0, 600)}|${jd.slice(0, 400)}`;
+  if (S.detectInFlight || (!explicit && detectKey === S.lastDetectKey)) return;
+
+  const btn = $('btn-detect-profile');
+  const nameEl = $('candidate-name');
+  const roleEl = $('role-title');
+  const origNamePh = nameEl.placeholder;
+  const origRolePh = roleEl.placeholder;
+
+  S.detectInFlight = true;
+  btn.disabled = true;
+  btn.textContent = '…';
+  if (!nameEl.value.trim()) nameEl.placeholder = 'Detecting via LLM…';
+  if (!roleEl.value.trim()) roleEl.placeholder = 'Detecting via LLM…';
+
+  try {
+    const res = await fetchWithTimeout(apiUrl('/api/profile/detect'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resume_text: resume, job_description: jd, model, api_key: apiToken, base_url: baseUrl }),
+    }, 30000);
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.detail || `Detection failed (HTTP ${res.status})`);
+    S.lastDetectKey = detectKey;
+    if (data.candidate_name && (explicit || !nameEl.value.trim())) nameEl.value = data.candidate_name;
+    if (data.role_title && (explicit || !roleEl.value.trim())) roleEl.value = data.role_title;
+  } catch (err) {
+    if (explicit) showSetupError(`Could not detect profile: ${err.name === 'AbortError' ? 'Request timed out.' : err.message}`);
+  } finally {
+    S.detectInFlight = false;
+    btn.disabled = false;
+    btn.textContent = 'DETECT';
+    nameEl.placeholder = origNamePh;
+    roleEl.placeholder = origRolePh;
+  }
+}
+
 async function engage() {
   clearSetupError();
   interruptSpeech();
@@ -457,15 +533,7 @@ async function engage() {
   if (!jd) { $('job-description').focus(); return showSetupError('Please paste the job description.'); }
   if (!model) { $('custom-model').focus(); return showSetupError('Please enter a model ID.'); }
   if (!apiToken) { $('api-token').focus(); return showSetupError('API Token is mandatory. Please enter your token.'); }
-  if (baseUrl) {
-    try {
-      const parsed = new URL(baseUrl);
-      if (parsed.protocol !== 'https:') throw new Error('Custom Base URL must start with https://.');
-    } catch (e) {
-      $('base-url').focus();
-      return showSetupError(e.message && e.message.startsWith('Custom Base URL') ? e.message : 'Invalid Base URL (expected https://...).');
-    }
-  }
+  if (!validateHttpsBaseUrl(baseUrl)) return;
   saveInMemoryCreds();
 
   $('btn-engage').disabled = true;
@@ -527,6 +595,8 @@ function enterInterview(data, micOk) {
   S.finishing = false;
   S.startTime = Date.now();
   $('hud-session').textContent = `SESSION: ${data.session_id.slice(0, 8).toUpperCase()}`;
+  if (!$('candidate-name').value.trim() && data.candidate_name) $('candidate-name').value = data.candidate_name;
+  if (!$('role-title').value.trim() && data.role_title) $('role-title').value = data.role_title;
   $('live-name').textContent = data.candidate_name;
   $('live-role').textContent = data.role_title;
   const modeTag = MODE_LABELS[data.mode] || data.mode || 'Panel';

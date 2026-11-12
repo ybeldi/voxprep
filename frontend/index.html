@@ -114,7 +114,7 @@
       </div>
     </section>
 
-    <details class="hud-panel settings">
+    <details class="hud-panel settings" id="calibration-panel">
       <summary class="panel-title">
         <span class="idx">04</span> Calibration <small>— voice &amp; optional profile</small>
         <span class="expand-hint mono">EXPAND</span>
@@ -126,7 +126,10 @@
         </div>
         <div class="field">
           <label for="role-title">Target role</label>
-          <input id="role-title" type="text" placeholder="Auto-detected from job posting">
+          <div class="select-with-btn">
+            <input id="role-title" type="text" placeholder="Auto-detected from job posting">
+            <button type="button" id="btn-detect-profile" class="btn-inline mono" title="Auto-detect name &amp; target role via LLM">DETECT</button>
+          </div>
         </div>
         <div class="field">
           <label for="voice-select">Interviewer voice</label>
