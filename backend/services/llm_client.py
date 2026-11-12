@@ -66,6 +66,8 @@ def summarize_provider_error(exc: Exception) -> str:
         return "Model or endpoint not found — verify the model ID and Base URL."
     if isinstance(exc, (anthropic.RateLimitError, openai.RateLimitError)):
         return "Rate limit or quota exceeded on your API key."
+    if isinstance(exc, (anthropic.APITimeoutError, openai.APITimeoutError)):
+        return "Request to AI provider timed out. Please try again."
     if isinstance(exc, (anthropic.APIConnectionError, openai.APIConnectionError)):
         return "Could not connect to the model API endpoint."
     if isinstance(exc, (anthropic.BadRequestError, openai.BadRequestError)):
@@ -111,6 +113,8 @@ class LLMClient:
             self._client = anthropic.Anthropic(
                 api_key=self.api_key,
                 base_url=self.base_url or ANTHROPIC_DEFAULT_BASE_URL,
+                http_client=anthropic.DefaultHttpxClient(follow_redirects=False),
+                timeout=60.0,
             )
         else:
             effective_url = self.base_url or (
@@ -119,7 +123,15 @@ class LLMClient:
             self._client = openai.OpenAI(
                 api_key=self.api_key,
                 base_url=effective_url,
+                http_client=openai.DefaultHttpxClient(follow_redirects=False),
+                timeout=60.0,
             )
+
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
     def _anthropic_call(
         self,

@@ -51,7 +51,7 @@ cp .env.example .env
 ./run.sh
 ```
 
-Open **http://127.0.0.1:8000** in **Chrome or Edge** and allow microphone access.
+Open **http://127.0.0.1:8000** (or **http://localhost:8000**) in **Chrome or Edge** and allow microphone access. [`frontend/config.js`](frontend/config.js) automatically uses same-origin requests on `localhost`/`127.0.0.1`, so cloning from GitHub works locally without editing any URLs.
 
 ---
 

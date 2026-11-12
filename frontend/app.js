@@ -252,19 +252,38 @@ function setConnectionStatus(text, ok = true) {
   link.className = ok ? 'link-ok' : 'link-bad';
 }
 
-async function loadStatus() {
-  if (API_BASE) setConnectionStatus('● WAKING BACKEND…', true);
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(apiUrl('/api/status'));
-    S.status = await res.json();
-    if (S.status.has_neural_tts) $('audio-mode').value = 'neural';
-    else if (S.status.has_openai_audio_key) $('audio-mode').value = 'openai';
-    else $('audio-mode').value = 'browser';
-    refreshVoiceSelect();
-    setConnectionStatus('● SYSTEMS ONLINE', true);
-  } catch {
-    setConnectionStatus('● SERVER OFFLINE', false);
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function loadStatus() {
+  const maxAttempts = API_BASE ? 6 : 1;
+  if (API_BASE) setConnectionStatus('● WAKING BACKEND…', true);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetchWithTimeout(apiUrl('/api/status'), {}, 12000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      S.status = await res.json();
+      if (S.status.has_neural_tts) $('audio-mode').value = 'neural';
+      else if (S.status.has_openai_audio_key) $('audio-mode').value = 'openai';
+      else $('audio-mode').value = 'browser';
+      refreshVoiceSelect();
+      setConnectionStatus('● SYSTEMS ONLINE', true);
+      return;
+    } catch {
+      if (attempt < maxAttempts) {
+        setConnectionStatus(`● WAKING BACKEND (${attempt}/${maxAttempts})…`, true);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  }
+  setConnectionStatus('● SERVER OFFLINE', false);
 }
 
 function tickClock() {
@@ -582,9 +601,16 @@ function connectWs() {
     if (S.pendingSend) { ws.send(S.pendingSend); S.pendingSend = null; }
   };
   ws.onmessage = (e) => handleServer(JSON.parse(e.data));
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     if (S.ws === ws) S.ws = null;
     if (S.sessionId === sid && !S.complete && !S.finishing) {
+      if ([4401, 4404, 1008].includes(e.code)) {
+        setConnectionStatus('● SESSION EXPIRED', false);
+        setUiState('idle');
+        renderSubtitle('Session expired or backend restarted. Click End to return to Setup.');
+        revealAll();
+        return;
+      }
       setConnectionStatus('● RECONNECTING', false);
       setTimeout(() => {
         if (S.sessionId === sid && !S.complete && !S.finishing && !S.ws) connectWs();
@@ -1062,7 +1088,7 @@ function resetAll() {
   clearSetupError();
   if (S.ws) { try { S.ws.close(); } catch (_) {} }
   Object.assign(S, {
-    sessionId: null, sessionToken: null, ws: null, complete: false,
+    sessionId: null, sessionToken: null, ws: null, pendingSend: null, complete: false,
     finishing: false, startTime: 0, lastLine: '', lastReport: null,
   });
   $('hud-session').textContent = 'SESSION: ——';

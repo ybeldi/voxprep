@@ -1,6 +1,9 @@
 import asyncio
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 import logging
 import re
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -21,6 +24,8 @@ from backend.config import (
 )
 from backend.services.resume_loader import parse_resume_bytes, SUPPORTED_EXTENSIONS
 from backend.services.interview_engine import (
+    SessionCapacityError,
+    cleanup_expired_sessions,
     create_session,
     get_session,
     remove_session,
@@ -33,9 +38,54 @@ from backend.services.scorecard import generate_interview_scorecard
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_interviewer")
 
-app = FastAPI(title="VoxPrep Interview Simulator", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    async def _sweep_loop():
+        while True:
+            await asyncio.sleep(60)
+            cleanup_expired_sessions()
+
+    task = asyncio.create_task(_sweep_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="VoxPrep Interview Simulator", version="2.0.0", lifespan=lifespan)
 
 VOICE_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
+_RATE_BUCKETS: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+_MAX_RATE_BUCKET_KEYS = 2000
+
+
+def _client_ip(request: Request) -> str:
+    cf_ip = (request.headers.get("cf-connecting-ip") or "").strip()
+    if cf_ip:
+        return cf_ip
+    xff = (request.headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(request: Request, bucket: str, limit: int, window_seconds: int = 600) -> None:
+    now = time.monotonic()
+    key = (_client_ip(request), bucket)
+    if key not in _RATE_BUCKETS and len(_RATE_BUCKETS) >= _MAX_RATE_BUCKET_KEYS:
+        _RATE_BUCKETS.pop(next(iter(_RATE_BUCKETS)))
+    entries = _RATE_BUCKETS[key]
+    cutoff = now - window_seconds
+    while entries and entries[0] < cutoff:
+        entries.popleft()
+    if len(entries) >= limit:
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a moment and try again.")
+    entries.append(now)
 
 
 def _allowed_origins() -> list[str]:
@@ -64,6 +114,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), geolocation=()"
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self'; "
@@ -122,8 +174,9 @@ def get_system_status():
 
 
 @app.post("/api/parse-resume")
-async def parse_resume(file: UploadFile = File(...)):
+async def parse_resume(request: Request, file: UploadFile = File(...)):
     """Parse an uploaded resume in memory (nothing is written to disk)."""
+    _enforce_rate_limit(request, "parse", limit=30)
     name = file.filename or "resume.txt"
     ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in SUPPORTED_EXTENSIONS:
@@ -147,8 +200,9 @@ async def parse_resume(file: UploadFile = File(...)):
 
 
 @app.post("/api/session/start")
-async def api_start_session(req: StartSessionRequest):
+async def api_start_session(req: StartSessionRequest, request: Request):
     """Initialize an interview simulation and get VoxPrep's opening line."""
+    _enforce_rate_limit(request, "start", limit=20)
     model = (req.model or "").strip()
     effective_key = (req.api_key or "").strip()
     for val, msg in (
@@ -165,17 +219,20 @@ async def api_start_session(req: StartSessionRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    session = create_session(
-        candidate_name=(req.candidate_name or "").strip(),
-        role_title=(req.role_title or "").strip(),
-        resume_text=req.resume_text,
-        job_description=req.job_description,
-        model=model,
-        api_key=effective_key,
-        base_url=base_url,
-        mode=(req.mode or "standard").strip(),
-        max_turns=req.max_turns or 10,
-    )
+    try:
+        session = create_session(
+            candidate_name=(req.candidate_name or "").strip(),
+            role_title=(req.role_title or "").strip(),
+            resume_text=req.resume_text,
+            job_description=req.job_description,
+            model=model,
+            api_key=effective_key,
+            base_url=base_url,
+            mode=(req.mode or "standard").strip(),
+            max_turns=req.max_turns or 10,
+        )
+    except SessionCapacityError as e:
+        raise HTTPException(status_code=429, detail=str(e))
 
     try:
         opening_speech = await asyncio.to_thread(session.start)
@@ -220,16 +277,18 @@ async def api_end_session(session_id: str, x_session_token: Optional[str] = Head
     session.is_active = False
     try:
         scorecard = await asyncio.to_thread(generate_interview_scorecard, session)
-        remove_session(session_id)
         return {"success": True, "scorecard": scorecard}
     except Exception as e:
         logger.error(f"Scorecard generation failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to compile debrief scorecard.")
+    finally:
+        remove_session(session_id)
 
 
 @app.post("/api/audio/synthesize")
-async def api_synthesize_speech(req: TurnRequest, x_session_token: Optional[str] = Header(default=None)):
+async def api_synthesize_speech(req: TurnRequest, request: Request, x_session_token: Optional[str] = Header(default=None)):
     """Server-side HD TTS synthesis endpoint (MP3) via Neural HD or OpenAI tts-1-hd."""
+    _enforce_rate_limit(request, "tts", limit=120)
     text = (req.message or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Message text is required for synthesis.")
@@ -309,9 +368,11 @@ async def websocket_interview_endpoint(websocket: WebSocket, session_id: str):
             if not speech_text:
                 continue
 
-            await websocket.send_json({"type": "interviewer_thinking", "stage": session.current_stage})
-
-            reply = await asyncio.to_thread(session.process_turn, speech_text)
+            async with session.turn_lock:
+                if not session.is_active or session.is_complete:
+                    continue
+                await websocket.send_json({"type": "interviewer_thinking", "stage": session.current_stage})
+                reply = await asyncio.to_thread(session.process_turn, speech_text)
 
             await websocket.send_json({
                 "type": "interviewer_speech",
