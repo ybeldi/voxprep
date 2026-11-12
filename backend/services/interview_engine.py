@@ -166,7 +166,7 @@ Return ONLY a JSON object with this exact shape:
   "gaps_to_probe": ["<2-3 job requirements that are missing, brief, or unverified on the resume>"]}}"""
 
         try:
-            data = self.llm.generate_json(prompt, PLAN_SCHEMA, max_tokens=700)
+            data = self.llm.generate_json(prompt, PLAN_SCHEMA, max_tokens=1000)
             self.interview_plan = [str(t) for t in data.get("topics", [])][:5] or default_plan
             self.strengths_to_verify = [str(s) for s in data.get("strengths_to_verify", [])][:3]
             self.gaps_to_probe = [str(g) for g in data.get("gaps_to_probe", [])][:3]

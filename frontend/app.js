@@ -53,6 +53,8 @@ const S = {
   lastReport: null,
   lastDetectKey: '',
   detectInFlight: false,
+  detectTimer: null,
+  userEdited: { name: false, role: false },
 };
 
 const SILENCE_MS = 3000;
@@ -134,16 +136,18 @@ document.addEventListener('DOMContentLoaded', () => {
   tickClock();
   setUiState('idle');
 
-  $('model-select').addEventListener('change', () => { clearSetupError(); onModelChange(); });
-  $('custom-model').addEventListener('input', () => { clearSetupError(); syncModelPlaceholders(); });
-  $('api-token').addEventListener('input', () => { clearSetupError(); saveInMemoryCreds(); });
+  $('model-select').addEventListener('change', () => { clearSetupError(); onModelChange(); scheduleDetect(100); });
+  $('custom-model').addEventListener('input', () => { clearSetupError(); syncModelPlaceholders(); scheduleDetect(700); });
+  $('api-token').addEventListener('input', () => { clearSetupError(); saveInMemoryCreds(); scheduleDetect(700); });
   $('api-token').addEventListener('change', () => detectProfile(false));
-  $('base-url').addEventListener('input', saveInMemoryCreds);
+  $('base-url').addEventListener('input', () => { saveInMemoryCreds(); scheduleDetect(700); });
   $('btn-toggle-token').addEventListener('click', toggleTokenVisibility);
-  $('resume-text').addEventListener('input', () => { clearSetupError(); updateWordCounts(); });
+  $('resume-text').addEventListener('input', () => { clearSetupError(); updateWordCounts(); scheduleDetect(700); });
   $('resume-text').addEventListener('change', () => detectProfile(false));
-  $('job-description').addEventListener('input', () => { clearSetupError(); updateWordCounts(); });
+  $('job-description').addEventListener('input', () => { clearSetupError(); updateWordCounts(); scheduleDetect(700); });
   $('job-description').addEventListener('change', () => detectProfile(false));
+  $('candidate-name').addEventListener('input', () => { S.userEdited.name = !!$('candidate-name').value.trim(); });
+  $('role-title').addEventListener('input', () => { S.userEdited.role = !!$('role-title').value.trim(); });
   $('calibration-panel').addEventListener('toggle', () => { if ($('calibration-panel').open) detectProfile(false); });
   $('btn-detect-profile').addEventListener('click', () => detectProfile(true));
   $('btn-engage').addEventListener('click', engage);
@@ -367,8 +371,11 @@ function initDropzone() {
   dz.addEventListener('drop', (e) => e.dataTransfer.files[0] && parseResume(e.dataTransfer.files[0]));
 }
 
-function applyResumeText(fileName, text) {
+function applyResumeText(fileName, text, fallbackName = '') {
   $('resume-text').value = text;
+  if (fallbackName && !S.userEdited.name && !$('candidate-name').value.trim()) {
+    $('candidate-name').value = fallbackName;
+  }
   $('dz-file').textContent = `✓ ${fileName}`;
   updateWordCounts();
   detectProfile(false);
@@ -395,7 +402,7 @@ async function parseResume(file) {
     let data = {};
     try { data = await res.json(); } catch {}
     if (!res.ok) throw new Error(data.detail || `Server returned HTTP ${res.status}`);
-    applyResumeText(data.file_name || file.name, data.text);
+    applyResumeText(data.file_name || file.name, data.text, data.candidate_name || '');
   } catch (err) {
     $('dz-file').textContent = '';
     const msg = err.name === 'AbortError'
@@ -465,16 +472,32 @@ function validateHttpsBaseUrl(baseUrl) {
   }
 }
 
+function scheduleDetect(delayMs = 700) {
+  clearTimeout(S.detectTimer);
+  S.detectTimer = setTimeout(() => detectProfile(false), delayMs);
+}
+
 async function detectProfile(explicit = false) {
+  clearTimeout(S.detectTimer);
   const resume = $('resume-text').value.trim();
   const jd = $('job-description').value.trim();
   const model = selectedModel();
   const apiToken = $('api-token').value.trim();
   const baseUrl = $('base-url').value.trim();
+  const nameEl = $('candidate-name');
+  const roleEl = $('role-title');
 
   if (!explicit) {
-    if (!$('calibration-panel').open || !apiToken || (!resume && !jd)) return;
-    if ($('candidate-name').value.trim() && $('role-title').value.trim()) return;
+    if (!resume && !jd) return;
+    if (apiToken.length < 10) {
+      if ($('calibration-panel').open) {
+        if (!nameEl.value.trim()) nameEl.placeholder = 'Enter API token above to auto-detect';
+        if (!roleEl.value.trim()) roleEl.placeholder = 'Enter API token above to auto-detect';
+      }
+      return;
+    }
+    if (S.userEdited.name && S.userEdited.role) return;
+    if (baseUrl && !validateHttpsBaseUrl(baseUrl)) return;
   } else {
     clearSetupError();
     if (!resume && !jd) { $('resume-text').focus(); return showSetupError('Upload or paste your resume or job posting first.'); }
@@ -483,41 +506,51 @@ async function detectProfile(explicit = false) {
     if (!validateHttpsBaseUrl(baseUrl)) return;
   }
 
-  const detectKey = `${model}|${baseUrl}|${resume.slice(0, 600)}|${jd.slice(0, 400)}`;
+  const detectKey = `${model}|${baseUrl}|${apiToken.slice(-6)}|${resume.length}:${resume.slice(0, 400)}|${jd.length}:${jd.slice(0, 400)}`;
   if (S.detectInFlight || (!explicit && detectKey === S.lastDetectKey)) return;
 
   const btn = $('btn-detect-profile');
-  const nameEl = $('candidate-name');
-  const roleEl = $('role-title');
-  const origNamePh = nameEl.placeholder;
-  const origRolePh = roleEl.placeholder;
+  const origNamePh = 'Auto-detected from resume';
+  const origRolePh = 'Auto-detected from job posting';
 
   S.detectInFlight = true;
   btn.disabled = true;
   btn.textContent = '…';
-  if (!nameEl.value.trim()) nameEl.placeholder = 'Detecting via LLM…';
-  if (!roleEl.value.trim()) roleEl.placeholder = 'Detecting via LLM…';
+  if (!S.userEdited.name) nameEl.placeholder = 'Detecting via LLM…';
+  if (!S.userEdited.role) roleEl.placeholder = 'Detecting via LLM…';
 
   try {
     const res = await fetchWithTimeout(apiUrl('/api/profile/detect'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resume_text: resume, job_description: jd, model, api_key: apiToken, base_url: baseUrl }),
+      body: JSON.stringify({
+        resume_text: resume.slice(0, 6000),
+        job_description: jd.slice(0, 4000),
+        model,
+        api_key: apiToken,
+        base_url: baseUrl,
+      }),
     }, 30000);
     let data = {};
     try { data = await res.json(); } catch {}
     if (!res.ok) throw new Error(data.detail || `Detection failed (HTTP ${res.status})`);
     S.lastDetectKey = detectKey;
-    if (data.candidate_name && (explicit || !nameEl.value.trim())) nameEl.value = data.candidate_name;
-    if (data.role_title && (explicit || !roleEl.value.trim())) roleEl.value = data.role_title;
+    if (data.candidate_name && (explicit || !S.userEdited.name)) nameEl.value = data.candidate_name;
+    if (data.role_title && (explicit || !S.userEdited.role)) roleEl.value = data.role_title;
+    nameEl.placeholder = origNamePh;
+    roleEl.placeholder = origRolePh;
   } catch (err) {
-    if (explicit) showSetupError(`Could not detect profile: ${err.name === 'AbortError' ? 'Request timed out.' : err.message}`);
+    nameEl.placeholder = origNamePh;
+    roleEl.placeholder = origRolePh;
+    if (explicit) {
+      showSetupError(`Could not detect profile: ${err.name === 'AbortError' ? 'Request timed out.' : err.message}`);
+    } else if ($('calibration-panel').open) {
+      if (!roleEl.value.trim()) roleEl.placeholder = 'Click DETECT or enter role manually';
+    }
   } finally {
     S.detectInFlight = false;
     btn.disabled = false;
     btn.textContent = 'DETECT';
-    nameEl.placeholder = origNamePh;
-    roleEl.placeholder = origRolePh;
   }
 }
 
@@ -1140,9 +1173,11 @@ function resetAll() {
   interruptSpeech();
   clearSetupError();
   if (S.ws) { try { S.ws.close(); } catch (_) {} }
+  clearTimeout(S.detectTimer);
   Object.assign(S, {
     sessionId: null, sessionToken: null, ws: null, pendingSend: null, complete: false,
-    finishing: false, startTime: 0, lastLine: '', lastReport: null,
+    finishing: false, startTime: 0, lastLine: '', lastReport: null, lastDetectKey: '',
+    userEdited: { name: false, role: false },
   });
   $('hud-session').textContent = 'SESSION: ——';
   $('subtitle').innerHTML = '';

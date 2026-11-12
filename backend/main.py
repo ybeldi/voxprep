@@ -152,8 +152,8 @@ class TurnRequest(BaseModel):
 
 
 class DetectProfileRequest(BaseModel):
-    resume_text: str = Field(default="", max_length=12000)
-    job_description: str = Field(default="", max_length=10000)
+    resume_text: str = Field(default="", max_length=50000)
+    job_description: str = Field(default="", max_length=30000)
     model: str = Field(default=CLAUDE_MODEL, max_length=120)
     api_key: str = Field(..., max_length=512)
     base_url: Optional[str] = Field(default="", max_length=512)
@@ -166,6 +166,7 @@ PROFILE_DETECT_SCHEMA = {
         "role_title": {"type": "string"},
     },
     "required": ["candidate_name", "role_title"],
+    "additionalProperties": False,
 }
 
 
@@ -252,7 +253,7 @@ Return ONLY a JSON object: {{"candidate_name": "<full name or empty>", "role_tit
     def _run_detect():
         client = LLMClient(model, api_key, base_url)
         try:
-            return client.generate_json(prompt, PROFILE_DETECT_SCHEMA, max_tokens=150)
+            return client.generate_json(prompt, PROFILE_DETECT_SCHEMA, max_tokens=800)
         finally:
             client.close()
 
