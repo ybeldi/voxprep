@@ -2,6 +2,12 @@
 // Flow: resume + job post  ->  boot sequence  ->  hands-free voice interview  ->  debrief report
 
 const $ = (id) => document.getElementById(id);
+const makeEl = (tag, cls = '', text = '') => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== '') n.textContent = text;
+  return n;
+};
 const API_BASE = (window.VOXPREP_API_BASE || '').trim().replace(/\/+$/, '');
 const apiUrl = (path) => `${API_BASE}${path}`;
 function wsUrl(path) {
@@ -189,20 +195,16 @@ function modelProvider(model) {
   return 'openai';
 }
 
+const PROVIDER_HINTS = {
+  anthropic: ['Optional — blank uses https://api.anthropic.com', 'Required — Anthropic or gateway token'],
+  openai: ['Optional — blank uses https://api.openai.com/v1', 'Required — OpenAI or gateway token'],
+  gemini: ['Optional — blank uses Google Gemini default API', 'Required — Google AI Studio (AIza…) or gateway token'],
+};
+
 function syncModelPlaceholders() {
-  const p = modelProvider(selectedModel());
-  const defaults = {
-    anthropic: 'Optional — blank uses https://api.anthropic.com',
-    openai: 'Optional — blank uses https://api.openai.com/v1',
-    gemini: 'Optional — blank uses Google Gemini default API',
-  };
-  const tokHints = {
-    anthropic: 'Required — Anthropic or gateway token',
-    openai: 'Required — OpenAI or gateway token',
-    gemini: 'Required — Google AI Studio (AIza…) or gateway token',
-  };
-  $('base-url').placeholder = defaults[p];
-  $('api-token').placeholder = tokHints[p];
+  const [baseHint, tokHint] = PROVIDER_HINTS[modelProvider(selectedModel())];
+  $('base-url').placeholder = baseHint;
+  $('api-token').placeholder = tokHint;
 }
 
 function countWords(s) {
@@ -294,18 +296,20 @@ function tickClock() {
   }
 }
 
-const NEURAL_VOICES = [
-  { id: 'en-GB-RyanNeural', label: 'Ryan — British Male (Smooth, Studio)' },
-  { id: 'en-GB-ThomasNeural', label: 'Thomas — British Male (Calm)' },
-  { id: 'en-US-AndrewMultilingualNeural', label: 'Andrew — Warm Natural Male' },
-  { id: 'en-GB-SoniaNeural', label: 'Sonia — British Female' },
-];
-const OPENAI_VOICES = [
-  { id: 'onyx', label: 'Onyx — Deep Smooth Male (HD)' },
-  { id: 'fable', label: 'Fable — British Expressive (HD)' },
-  { id: 'echo', label: 'Echo — Warm Male (HD)' },
-  { id: 'alloy', label: 'Alloy — Balanced (HD)' },
-];
+const SERVER_VOICES = {
+  neural: [
+    ['en-GB-RyanNeural', 'Ryan — British Male (Smooth, Studio)'],
+    ['en-GB-ThomasNeural', 'Thomas — British Male (Calm)'],
+    ['en-US-AndrewMultilingualNeural', 'Andrew — Warm Natural Male'],
+    ['en-GB-SoniaNeural', 'Sonia — British Female'],
+  ],
+  openai: [
+    ['onyx', 'Onyx — Deep Smooth Male (HD)'],
+    ['fable', 'Fable — British Expressive (HD)'],
+    ['echo', 'Echo — Warm Male (HD)'],
+    ['alloy', 'Alloy — Balanced (HD)'],
+  ],
+};
 
 function refreshVoiceSelect() {
   const mode = $('audio-mode').value;
@@ -313,30 +317,23 @@ function refreshVoiceSelect() {
   const current = sel.value;
   sel.innerHTML = '';
 
-  if (mode === 'neural' || mode === 'openai') {
-    const list = mode === 'neural' ? NEURAL_VOICES : OPENAI_VOICES;
-    list.forEach((v) => {
-      const o = document.createElement('option');
-      o.value = v.id;
-      o.textContent = v.label;
+  const serverList = SERVER_VOICES[mode];
+  if (serverList) {
+    serverList.forEach(([id, label]) => {
+      const o = makeEl('option', '', label);
+      o.value = id;
       sel.appendChild(o);
     });
-    if (list.some((v) => v.id === current)) sel.value = current;
+    if (serverList.some(([id]) => id === current)) sel.value = current;
     return;
   }
 
   const preferred = ['Microsoft Ryan', 'Microsoft Libby', 'Google UK English Male', 'Google UK English Female', 'Google US English', 'Arthur', 'Oliver', 'Daniel'];
   const en = S.voices.filter((v) => v.lang.startsWith('en'));
-  en.sort((a, b) => {
-    const aNat = /Natural|Google|Premium|Enhanced/i.test(a.name) ? 1 : 0;
-    const bNat = /Natural|Google|Premium|Enhanced/i.test(b.name) ? 1 : 0;
-    if (bNat !== aNat) return bNat - aNat;
-    return (b.lang === 'en-GB') - (a.lang === 'en-GB');
-  });
+  en.sort((a, b) => (/Natural|Google|Premium|Enhanced/i.test(b.name) - /Natural|Google|Premium|Enhanced/i.test(a.name)) || ((b.lang === 'en-GB') - (a.lang === 'en-GB')));
   en.forEach((v) => {
-    const o = document.createElement('option');
+    const o = makeEl('option', '', `${v.name} (${v.lang})`);
     o.value = v.name;
-    o.textContent = `${v.name} (${v.lang})`;
     sel.appendChild(o);
   });
   const pick = (en.some((v) => v.name === current) && current) ||
@@ -363,22 +360,8 @@ function initDropzone() {
   dz.addEventListener('drop', (e) => e.dataTransfer.files[0] && parseResume(e.dataTransfer.files[0]));
 }
 
-function guessCandidateNameLocal(text) {
-  for (const raw of (text || '').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const cleaned = line.replace(/^[#*\s]+/, '').trim();
-    if (cleaned.length > 0 && cleaned.length < 40 && !/resume|cv|curriculum|@|http|\d/i.test(cleaned)) {
-      return cleaned;
-    }
-    break;
-  }
-  return '';
-}
-
-function applyParsedResume(fileName, text, candidateName) {
+function applyResumeText(fileName, text) {
   $('resume-text').value = text;
-  if (!$('candidate-name').value && candidateName) $('candidate-name').value = candidateName;
   $('dz-file').textContent = `✓ ${fileName}`;
   updateWordCounts();
 }
@@ -386,29 +369,25 @@ function applyParsedResume(fileName, text, candidateName) {
 async function parseResume(file) {
   clearSetupError();
   const ext = file.name.includes('.') ? `.${file.name.split('.').pop().toLowerCase()}` : '';
-  if (!['.pdf', '.txt', '.md'].includes(ext)) {
-    return showSetupError('Supported formats: PDF, TXT, MD.');
-  }
-  if (file.size > 5 * 1024 * 1024) {
-    return showSetupError('Resume file exceeds 5 MB limit.');
-  }
-  if (ext === '.txt' || ext === '.md') {
-    const text = (await file.text()).trim();
-    if (!text) return showSetupError('Could not extract text from this file.');
-    applyParsedResume(file.name, text, guessCandidateNameLocal(text));
-    return;
-  }
+  if (!['.pdf', '.txt', '.md'].includes(ext)) return showSetupError('Supported formats: PDF, TXT, MD.');
+  if (file.size > 5 * 1024 * 1024) return showSetupError('Resume file exceeds 5 MB limit.');
 
-  const waking = API_BASE && $('hud-link').textContent.includes('WAKING');
-  $('dz-file').textContent = waking ? 'WAKING BACKEND & PARSING…' : 'PARSING…';
-  const fd = new FormData();
-  fd.append('file', file);
   try {
+    if (ext === '.txt' || ext === '.md') {
+      const text = (await file.text()).trim();
+      if (!text) return showSetupError('Could not extract text from this file.');
+      return applyResumeText(file.name, text);
+    }
+
+    const waking = API_BASE && $('hud-link').textContent.includes('WAKING');
+    $('dz-file').textContent = waking ? 'WAKING BACKEND & PARSING…' : 'PARSING…';
+    const fd = new FormData();
+    fd.append('file', file);
     const res = await fetchWithTimeout(apiUrl('/api/parse-resume'), { method: 'POST', body: fd }, 60000);
     let data = {};
     try { data = await res.json(); } catch {}
     if (!res.ok) throw new Error(data.detail || `Server returned HTTP ${res.status}`);
-    applyParsedResume(data.file_name || file.name, data.text, data.candidate_name);
+    applyResumeText(data.file_name || file.name, data.text);
   } catch (err) {
     $('dz-file').textContent = '';
     const msg = err.name === 'AbortError'
@@ -446,9 +425,8 @@ async function initAudio() {
 // ---------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function bootLine(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
+function bootLine(text, ok = false) {
+  const div = makeEl('div', ok ? 'ok' : '', text);
   $('boot-log').appendChild(div);
   return div;
 }
@@ -500,7 +478,7 @@ async function engage() {
   $('boot-overlay').classList.add('active');
   setUiState('thinking');
 
-  const request = fetch(apiUrl('/api/session/start'), {
+  const request = fetchWithTimeout(apiUrl('/api/session/start'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -514,42 +492,29 @@ async function engage() {
       candidate_name: $('candidate-name').value.trim(),
       role_title: $('role-title').value.trim(),
     }),
-  }).then(async (res) => {
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Failed to start interview');
+  }, 60000).then(async (res) => {
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.detail || `Failed to start interview (HTTP ${res.status})`);
     return data;
   });
 
-  const steps = [
-    'Initializing VoxPrep interview protocol',
-    `Engaging neural core — ${model}${baseUrl ? ' (custom endpoint)' : ' (default API)'}`,
-    `Parsing subject dossier — ${countWords(resume)} words`,
-    `Decrypting mission brief — ${countWords(jd)} words`,
-    `Audio subsystems — ${micOk ? 'microphone linked' : 'microphone unavailable, keyboard mode'}`,
-    'Cross-referencing competencies against requirements',
-  ];
   try {
-    for (let i = 0; i < steps.length; i++) {
-      bootLine(steps[i]).classList.add('ok');
-      $('boot-progress').style.width = `${Math.round(((i + 1) / (steps.length + 2)) * 100)}%`;
-      await sleep(380);
-    }
-    const pending = bootLine('Synthesizing interview blueprint');
+    bootLine(`Engaging ${model}${baseUrl ? ' (custom endpoint)' : ''} · ${micOk ? 'mic ready' : 'keyboard mode'}`, true);
+    $('boot-progress').style.width = '45%';
+    const pending = bootLine('Synthesizing interview blueprint & inferring role via LLM…');
     const data = await request;
     pending.classList.add('ok');
-    $('boot-progress').style.width = '92%';
-    bootLine(`Subject identified: ${data.candidate_name} — ${data.role_title}`).classList.add('ok');
-    await sleep(420);
     $('boot-progress').style.width = '100%';
-    bootLine('All systems nominal. Engaging.');
-    await sleep(600);
+    bootLine(`Ready: ${data.candidate_name} — ${data.role_title}`, true);
+    await sleep(250);
     enterInterview(data, micOk);
   } catch (err) {
     bootLine(`ERROR: ${err.message}`);
-    await sleep(1600);
+    await sleep(1200);
     $('boot-overlay').classList.remove('active');
     setUiState('idle');
-    showSetupError(`Could not start interview: ${err.message}`);
+    showSetupError(`Could not start interview: ${err.name === 'AbortError' ? 'Request timed out.' : err.message}`);
   } finally {
     $('btn-engage').disabled = false;
   }
@@ -568,11 +533,7 @@ function enterInterview(data, micOk) {
   $('live-model').textContent = `${(data.model || selectedModel()).toUpperCase()} · ${modeTag.toUpperCase()}`;
   updateTurnProgress(0, data.max_turns || parseInt($('max-turns').value, 10) || 10);
   $('topics').innerHTML = '';
-  (data.plan || []).forEach((t) => {
-    const s = document.createElement('span');
-    s.textContent = t;
-    $('topics').appendChild(s);
-  });
+  (data.plan || []).forEach((t) => $('topics').appendChild(makeEl('span', '', t)));
   $('log').innerHTML = '';
   $('turn-count').textContent = '0';
   updateStage(data.stage);
@@ -603,18 +564,10 @@ function updateStage(stage) {
 }
 
 function buildMessageNode(speaker, meta, text, isUser) {
-  const div = document.createElement('div');
-  div.className = `msg ${isUser ? 'user' : ''}`;
-  const whoEl = document.createElement('div');
-  whoEl.className = 'who';
-  whoEl.appendChild(document.createTextNode(speaker));
-  const span = document.createElement('span');
-  span.textContent = meta || '';
-  whoEl.appendChild(span);
-  const body = document.createElement('div');
-  body.textContent = text;
-  div.appendChild(whoEl);
-  div.appendChild(body);
+  const div = makeEl('div', `msg ${isUser ? 'user' : ''}`);
+  const whoEl = makeEl('div', 'who', speaker);
+  whoEl.appendChild(makeEl('span', '', meta || ''));
+  div.append(whoEl, makeEl('div', '', text));
   return div;
 }
 
@@ -1004,17 +957,18 @@ async function finishInterview() {
   renderSubtitle('Compiling your performance analysis…');
   revealAll();
   try {
-    const res = await fetch(apiUrl(`/api/session/${S.sessionId}/end`), {
+    const res = await fetchWithTimeout(apiUrl(`/api/session/${S.sessionId}/end`), {
       method: 'POST',
       headers: { 'X-Session-Token': S.sessionToken || '' },
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Analysis failed');
+    }, 60000);
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.detail || `Analysis failed (HTTP ${res.status})`);
     showReport(data.scorecard);
   } catch (err) {
     S.finishing = false;
     setUiState('idle');
-    renderSubtitle(`Analysis failed: ${err.message}`);
+    renderSubtitle(`Analysis failed: ${err.name === 'AbortError' ? 'Request timed out.' : err.message}`);
     revealAll();
   }
 }
@@ -1034,7 +988,7 @@ const VERDICT_COLORS = {
 function fillList(id, items) {
   const ul = $(id);
   ul.innerHTML = '';
-  (items || []).forEach((t) => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+  (items || []).forEach((t) => ul.appendChild(makeEl('li', '', t)));
 }
 
 function showReport(sc) {
@@ -1076,23 +1030,13 @@ function showReport(sc) {
   bars.innerHTML = '';
   Object.entries(sc.category_scores || {}).forEach(([k, v]) => {
     const val = Math.max(0, Math.min(10, parseFloat(v) || 0));
-    const row = document.createElement('div');
-    row.className = 'bar-row';
-    const lbl = document.createElement('div');
-    lbl.className = 'lbl';
-    const nameSpan = document.createElement('span');
-    nameSpan.textContent = CATEGORY_LABELS[k] || k;
-    const scoreB = document.createElement('b');
-    scoreB.textContent = val.toFixed(1);
-    lbl.appendChild(nameSpan);
-    lbl.appendChild(scoreB);
-    const track = document.createElement('div');
-    track.className = 'bar-track';
-    const fill = document.createElement('div');
-    fill.className = 'bar-fill';
+    const row = makeEl('div', 'bar-row');
+    const lbl = makeEl('div', 'lbl');
+    lbl.append(makeEl('span', '', CATEGORY_LABELS[k] || k), makeEl('b', '', val.toFixed(1)));
+    const track = makeEl('div', 'bar-track');
+    const fill = makeEl('div', 'bar-fill');
     track.appendChild(fill);
-    row.appendChild(lbl);
-    row.appendChild(track);
+    row.append(lbl, track);
     bars.appendChild(row);
     requestAnimationFrame(() => setTimeout(() => { fill.style.width = `${val * 10}%`; }, 100));
   });
