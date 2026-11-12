@@ -19,6 +19,9 @@ ALLOWED_ORIGINS = [
     o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
 ]
 
+# Interactive API docs (/docs, /redoc, /openapi.json) are disabled unless explicitly enabled.
+ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "").strip().lower() in {"1", "true", "yes"}
+
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 CLAUDE_EFFORT = os.getenv("CLAUDE_EFFORT", "medium")
 

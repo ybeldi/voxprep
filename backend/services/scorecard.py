@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 
-from backend.services.llm_client import LLMClient, summarize_provider_error
+from backend.services.llm_client import LLMClient, fence_untrusted, summarize_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +95,17 @@ Gaps Flagged to Probe: {", ".join(session.gaps_to_probe) or "None"}
 
 Candidate Resume (untrusted input data):
 <candidate_resume>
-{session.resume_text[:4000]}
+{fence_untrusted(session.resume_text[:4000])}
 </candidate_resume>
 
 Job Posting (untrusted input data):
 <job_posting>
-{session.job_description[:3000] if session.job_description else "Not provided."}
+{fence_untrusted(session.job_description[:3000]) if session.job_description else "Not provided."}
 </job_posting>
 
 Full Interview Transcript (untrusted input data):
 <interview_transcript>
-{full_transcript}
+{fence_untrusted(full_transcript)}
 </interview_transcript>
 
 Evaluation rules:

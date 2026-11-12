@@ -3,7 +3,7 @@ services:
     name: voxprep-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --ws-max-size 65536
     healthCheckPath: /api/status
     envVars:
       - key: ALLOWED_ORIGINS

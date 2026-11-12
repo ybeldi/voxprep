@@ -26,4 +26,4 @@ echo "Application running locally at: http://127.0.0.1:8000"
 echo "Press Ctrl+C to stop."
 echo "=============================================="
 
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload --ws-max-size 65536

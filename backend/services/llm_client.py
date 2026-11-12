@@ -1,6 +1,7 @@
 import ipaddress
 import json
 import logging
+import re
 import socket
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -16,6 +17,13 @@ OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 GEMINI_DEFAULT_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 BLOCKED_HOSTNAMES = {"localhost", "localhost.localdomain", "metadata.google.internal"}
+
+_UNTRUSTED_TAG_RE = re.compile(r"<\s*/?\s*(candidate_resume|job_posting|interview_transcript)\b[^>]*>", re.IGNORECASE)
+
+
+def fence_untrusted(text: Optional[str]) -> str:
+    """Strip prompt delimiter tags from untrusted text so it cannot break out of its data block."""
+    return _UNTRUSTED_TAG_RE.sub("", text or "")
 
 
 def validate_base_url(base_url: Optional[str]) -> str:
