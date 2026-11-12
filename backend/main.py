@@ -193,7 +193,7 @@ async def parse_resume(request: Request, file: UploadFile = File(...)):
             raise HTTPException(status_code=413, detail="Resume file exceeds 5 MB limit.")
         chunks.append(chunk)
 
-    info = parse_resume_bytes(name, b"".join(chunks))
+    info = await asyncio.to_thread(parse_resume_bytes, name, b"".join(chunks))
     if not info["text"]:
         raise HTTPException(status_code=422, detail="Could not extract text from this file. Try pasting the resume text instead.")
     return {"success": True, **info}

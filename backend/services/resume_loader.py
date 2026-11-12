@@ -9,13 +9,25 @@ logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md"}
 
 
+MAX_PDF_PAGES = 15
+MAX_EXTRACTED_CHARS = 25000
+
+
 def extract_text_from_pdf_bytes(data: bytes) -> str:
-    """Extract plain text from PDF bytes using pypdf."""
+    """Extract plain text from PDF bytes using pypdf (bounded for speed)."""
     try:
         import pypdf
         reader = pypdf.PdfReader(io.BytesIO(data))
-        parts = [t for t in (page.extract_text() for page in reader.pages) if t]
-        return "\n\n".join(parts)
+        parts = []
+        total_chars = 0
+        for page in reader.pages[:MAX_PDF_PAGES]:
+            text = page.extract_text()
+            if text:
+                parts.append(text)
+                total_chars += len(text)
+                if total_chars >= MAX_EXTRACTED_CHARS:
+                    break
+        return "\n\n".join(parts)[:MAX_EXTRACTED_CHARS]
     except Exception as e:
         logger.error(f"Failed to parse PDF: {e}")
         return ""

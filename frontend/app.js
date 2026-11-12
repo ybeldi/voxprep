@@ -363,21 +363,60 @@ function initDropzone() {
   dz.addEventListener('drop', (e) => e.dataTransfer.files[0] && parseResume(e.dataTransfer.files[0]));
 }
 
+function guessCandidateNameLocal(text) {
+  for (const raw of (text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cleaned = line.replace(/^[#*\s]+/, '').trim();
+    if (cleaned.length > 0 && cleaned.length < 40 && !/resume|cv|curriculum|@|http|\d/i.test(cleaned)) {
+      return cleaned;
+    }
+    break;
+  }
+  return '';
+}
+
+function applyParsedResume(fileName, text, candidateName) {
+  $('resume-text').value = text;
+  if (!$('candidate-name').value && candidateName) $('candidate-name').value = candidateName;
+  $('dz-file').textContent = `✓ ${fileName}`;
+  updateWordCounts();
+}
+
 async function parseResume(file) {
-  $('dz-file').textContent = 'PARSING…';
+  clearSetupError();
+  const ext = file.name.includes('.') ? `.${file.name.split('.').pop().toLowerCase()}` : '';
+  if (!['.pdf', '.txt', '.md'].includes(ext)) {
+    return showSetupError('Supported formats: PDF, TXT, MD.');
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    return showSetupError('Resume file exceeds 5 MB limit.');
+  }
+  if (ext === '.txt' || ext === '.md') {
+    const text = (await file.text()).trim();
+    if (!text) return showSetupError('Could not extract text from this file.');
+    applyParsedResume(file.name, text, guessCandidateNameLocal(text));
+    return;
+  }
+
+  const waking = API_BASE && $('hud-link').textContent.includes('WAKING');
+  $('dz-file').textContent = waking ? 'WAKING BACKEND & PARSING…' : 'PARSING…';
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await fetch(apiUrl('/api/parse-resume'), { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Parse failed');
-    $('resume-text').value = data.text;
-    if (!$('candidate-name').value && data.candidate_name) $('candidate-name').value = data.candidate_name;
-    $('dz-file').textContent = `✓ ${data.file_name}`;
-    updateWordCounts();
+    const res = await fetchWithTimeout(apiUrl('/api/parse-resume'), { method: 'POST', body: fd }, 60000);
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok) throw new Error(data.detail || `Server returned HTTP ${res.status}`);
+    applyParsedResume(data.file_name || file.name, data.text, data.candidate_name);
   } catch (err) {
     $('dz-file').textContent = '';
-    showSetupError('Could not read resume: ' + err.message);
+    const msg = err.name === 'AbortError'
+      ? 'Backend timed out while waking up. Wait a moment and try again, or paste your resume text.'
+      : err.message;
+    showSetupError('Could not read resume: ' + msg);
+  } finally {
+    $('resume-file').value = '';
   }
 }
 
