@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoxPrep — AI Voice Interview Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="hud-bg" aria-hidden="true"></div>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <!-- ============ TOP HUD BAR ============ -->
+  <header class="hud-top">
+    <div class="brand">
+      <canvas id="brand-reactor" class="brand-reactor" width="44" height="44"></canvas>
+      <div>
+        <h1>VoxPrep</h1>
+        <p>AI Voice Interview Simulator</p>
+      </div>
+    </div>
+    <div class="hud-top-right mono">
+      <span class="zero-save-pill" title="Nothing is written to disk or browser storage">⛨ ZERO-SAVE</span>
+      <span class="sep">/</span>
+      <span id="hud-session">SESSION: ——</span>
+      <span class="sep">/</span>
+      <span id="hud-clock">00:00:00</span>
+      <span class="sep">/</span>
+      <span id="hud-link" class="link-ok">● SYSTEMS ONLINE</span>
+    </div>
+  </header>
+
+  <!-- ============ STEP 1: INITIALIZATION ============ -->
+  <main id="setup-screen" class="screen active">
+    <div class="setup-intro">
+      <div class="eyebrow mono">Neural Interview Readiness System</div>
+      <h2>Good day. Shall we prepare you for your interview?</h2>
+      <p>Provide your resume and the job posting, choose your AI model, and engage in a real-time voice simulation.</p>
+    </div>
+
+    <div class="setup-grid">
+      <section class="hud-panel">
+        <div class="panel-title">
+          <span class="idx">01</span> Subject Dossier <small>— your resume</small>
+          <span class="word-badge mono" id="resume-words">0 WORDS</span>
+        </div>
+        <label id="dropzone" class="dropzone">
+          <input type="file" id="resume-file" class="sr-only" accept=".pdf,.txt,.md">
+          <div class="dz-icon">⬡</div>
+          <div class="dz-text"><strong>Drop resume here</strong> or click to upload<br><small>PDF · TXT · MD (parsed in memory)</small></div>
+          <div class="dz-file mono" id="dz-file"></div>
+        </label>
+        <textarea id="resume-text" rows="6" placeholder="…or paste your resume text here"></textarea>
+      </section>
+
+      <section class="hud-panel">
+        <div class="panel-title">
+          <span class="idx">02</span> Mission Brief <small>— job posting</small>
+          <span class="word-badge mono" id="jd-words">0 WORDS</span>
+        </div>
+        <textarea id="job-description" class="jd" rows="11" placeholder="Paste the full job description: title, responsibilities, requirements…"></textarea>
+      </section>
+    </div>
+
+    <section class="hud-panel engine-panel">
+      <div class="panel-title"><span class="idx">03</span> AI Engine &amp; Simulation <small>— model, token &amp; interview style</small></div>
+      <div class="settings-grid">
+        <div class="field">
+          <label for="model-select">AI Model <span class="req">*</span></label>
+          <select id="model-select">
+            <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (Anthropic)</option>
+            <option value="claude-haiku-5-5">Claude Haiku 5.5 (Anthropic — Fast / Low Cost)</option>
+            <option value="gpt-6-sol">GPT-6 (OpenAI — gpt-6-sol)</option>
+            <option value="gpt-6-astra">GPT-6 Astra (OpenAI — Flagship)</option>
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash (Google)</option>
+            <option value="custom">Custom model ID…</option>
+          </select>
+          <input id="custom-model" type="text" class="hidden custom-model" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Enter exact model ID (e.g. gpt-6, claude-haiku-4-5)">
+        </div>
+        <div class="field">
+          <label for="api-token">API Token <span class="req">*</span></label>
+          <div class="input-with-btn">
+            <input id="api-token" type="password" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Required — enter your API token">
+            <button type="button" id="btn-toggle-token" class="btn-eye mono" aria-pressed="false" aria-label="Show API token" title="Show / hide token">SHOW</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="base-url">Base URL <span class="opt">(optional)</span></label>
+          <input id="base-url" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Leave blank for default provider API">
+        </div>
+        <div class="field">
+          <label for="interview-mode">Interview Style</label>
+          <select id="interview-mode">
+            <option value="standard">Realistic Panel (Balanced VoxPrep)</option>
+            <option value="strict">Bar Raiser (Tough &amp; Metrics-Driven)</option>
+            <option value="coaching">Practice Coach (Live Mini-Feedback)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="max-turns">Simulation Length</label>
+          <select id="max-turns">
+            <option value="6">Quick Screen (6 turns)</option>
+            <option value="10" selected>Full Interview (10 turns)</option>
+            <option value="14">Deep Dive (14 turns)</option>
+          </select>
+        </div>
+        <div class="field">
+          <span class="field-label">Mic Mode</span>
+          <label class="toggle-box" for="auto-listen"><input type="checkbox" id="auto-listen" checked> <span>Hands-free auto-listen</span></label>
+        </div>
+      </div>
+    </section>
+
+    <details class="hud-panel settings">
+      <summary class="panel-title">
+        <span class="idx">04</span> Calibration <small>— voice &amp; optional profile</small>
+        <span class="expand-hint mono">EXPAND</span>
+      </summary>
+      <div class="settings-grid">
+        <div class="field">
+          <label for="candidate-name">Your name</label>
+          <input id="candidate-name" type="text" placeholder="Auto-detected from resume">
+        </div>
+        <div class="field">
+          <label for="role-title">Target role</label>
+          <input id="role-title" type="text" placeholder="Auto-detected from job posting">
+        </div>
+        <div class="field">
+          <label for="voice-select">Interviewer voice</label>
+          <div class="select-with-btn">
+            <select id="voice-select"></select>
+            <button type="button" id="btn-test-voice" class="btn-inline mono" title="Preview selected voice">TEST</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="audio-mode">Voice engine</label>
+          <select id="audio-mode">
+            <option value="neural">HD Neural Voice (British Studio — smooth, free)</option>
+            <option value="openai">OpenAI HD Voice (tts-1-hd)</option>
+            <option value="browser">Browser speech (offline fallback)</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <div class="privacy-banner" id="privacy-disclaimer" role="note">
+      <div class="privacy-icon" aria-hidden="true">⛨</div>
+      <div>
+        <strong class="mono">ZERO-PERSISTENCE DISCLAIMER — NOTHING IS SAVED</strong>
+        <p>Your resume, job description, API token, voice audio, transcript, and final report exist only in active session memory. Nothing is saved to disk, database, or browser storage — refreshing or closing this tab wipes everything immediately.</p>
+      </div>
+    </div>
+
+    <div class="setup-actions">
+      <div id="setup-error" class="setup-error mono hidden" role="alert" aria-live="polite"></div>
+      <button id="btn-engage" class="btn-engage">
+        <span>Initiate Interview</span>
+      </button>
+      <p class="hint mono">Microphone access requested on launch · Chrome or Edge recommended</p>
+    </div>
+  </main>
+
+  <!-- ============ BOOT OVERLAY ============ -->
+  <div id="boot-overlay" class="boot-overlay">
+    <canvas id="boot-reactor" width="260" height="260"></canvas>
+    <div class="boot-bar"><div class="boot-bar-fill" id="boot-progress"></div></div>
+    <div id="boot-log" class="boot-log mono"></div>
+  </div>
+
+  <!-- ============ STEP 2: LIVE INTERVIEW ============ -->
+  <main id="interview-screen" class="screen">
+    <aside class="hud-panel side left">
+      <div class="panel-title">Subject</div>
+      <div class="subject">
+        <div class="subject-name" id="live-name">—</div>
+        <div class="subject-role" id="live-role">—</div>
+        <div class="model-chip mono" id="live-model">MODEL: —</div>
+      </div>
+
+      <div class="panel-title">Protocol</div>
+      <ol class="stages" id="stage-list">
+        <li data-stage="INTRODUCTION">Introduction</li>
+        <li data-stage="BACKGROUND_REVIEW">Background</li>
+        <li data-stage="CORE_TECHNICAL">Role Expertise</li>
+        <li data-stage="SCENARIO_PROBLEM_SOLVING">Scenario</li>
+        <li data-stage="BEHAVIORAL_TEAMWORK">Behavioral</li>
+        <li data-stage="CANDIDATE_QUESTIONS">Your Questions</li>
+        <li data-stage="COMPLETED">Debrief</li>
+      </ol>
+
+      <div class="panel-title">Focus Vectors</div>
+      <div class="topics" id="topics"></div>
+
+      <div class="side-footer">
+        <div class="turn-progress">
+          <div class="timer mono"><span>PROGRESS</span><b id="turn-progress-label">0 / 10</b></div>
+          <div class="progress-track"><div class="progress-fill" id="turn-progress-fill"></div></div>
+        </div>
+        <div class="timer mono"><span>ELAPSED</span><b id="elapsed">00:00</b></div>
+        <button id="btn-end" class="btn-ghost danger">Terminate &amp; Analyse</button>
+      </div>
+    </aside>
+
+    <section class="core">
+      <div class="reactor-wrap">
+        <span class="reticle tl" aria-hidden="true"></span>
+        <span class="reticle tr" aria-hidden="true"></span>
+        <span class="reticle bl" aria-hidden="true"></span>
+        <span class="reticle br" aria-hidden="true"></span>
+        <canvas id="main-reactor"></canvas>
+        <div class="reactor-label">
+          <div class="state mono" id="state-label">STANDBY</div>
+        </div>
+      </div>
+
+      <div class="subtitle" id="subtitle"></div>
+
+      <div class="controls">
+        <div class="live-user mono" id="live-user"></div>
+        <div class="controls-row">
+          <button id="btn-replay" class="btn-round sm" title="Replay last line">⟲</button>
+          <button id="btn-mic" class="btn-mic" title="Talk / Send (Space)">
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          </button>
+          <button id="btn-keyboard" class="btn-round sm" title="Type instead">⌨</button>
+        </div>
+        <div class="mic-meter" aria-hidden="true"><div class="mic-meter-fill" id="mic-meter"></div></div>
+        <div class="mic-hint mono" id="mic-hint">Press SPACE or the mic to answer</div>
+        <div class="shortcut-bar mono">
+          <span><kbd>SPACE</kbd> Speak / Send / Interrupt</span>
+          <span><kbd>ESC</kbd> Cancel</span>
+          <span><kbd>⌨</kbd> Type</span>
+        </div>
+        <form id="type-form" class="type-form hidden">
+          <input id="type-input" type="text" placeholder="Type your answer and press Enter…" autocomplete="off">
+        </form>
+      </div>
+    </section>
+
+    <aside class="hud-panel side right">
+      <div class="panel-title">Comms Log <span class="count mono" id="turn-count">0</span></div>
+      <div class="log" id="log"></div>
+    </aside>
+  </main>
+
+  <!-- ============ STEP 3: DEBRIEF ============ -->
+  <main id="report-screen" class="screen">
+    <div class="report">
+      <div class="report-head">
+        <div>
+          <div class="eyebrow mono">Post-Interview Analysis · Ephemeral Session</div>
+          <h2 id="r-name">—</h2>
+          <p id="r-role">—</p>
+        </div>
+        <div class="report-actions">
+          <button id="btn-download" class="btn-ghost">Download JSON</button>
+          <button id="btn-print" class="btn-ghost">Print / PDF</button>
+          <button id="btn-restart" class="btn-ghost primary">New Simulation</button>
+        </div>
+      </div>
+
+      <div class="report-grid">
+        <section class="hud-panel score-panel">
+          <div class="score-ring">
+            <svg viewBox="0 0 200 200">
+              <circle cx="100" cy="100" r="86" class="ring-bg"/>
+              <circle cx="100" cy="100" r="86" class="ring-fg" id="r-ring"/>
+            </svg>
+            <div class="score-val"><b id="r-score">0</b><span>/100</span></div>
+          </div>
+          <div class="verdict" id="r-verdict">—</div>
+          <div class="bars" id="r-bars"></div>
+        </section>
+
+        <section class="hud-panel">
+          <div class="panel-title">Assessment</div>
+          <p class="summary" id="r-summary"></p>
+          <div class="cols">
+            <div>
+              <div class="panel-title ok">Strengths</div>
+              <ul id="r-strengths" class="list"></ul>
+            </div>
+            <div>
+              <div class="panel-title warn">Coaching</div>
+              <ul id="r-improve" class="list"></ul>
+            </div>
+          </div>
+          <div class="panel-title">Prepare For These</div>
+          <ul id="r-followups" class="list"></ul>
+          <details class="transcript-review">
+            <summary class="panel-title">Transcript Review <span class="expand-hint mono">VIEW</span></summary>
+            <div id="r-transcript" class="r-transcript"></div>
+          </details>
+          <p class="report-note mono">Nothing was saved on the server or in your browser. Download or print above if you want to keep this debrief.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ END-INTERVIEW CONFIRM DIALOG ============ -->
+  <dialog id="end-confirm-dialog" class="hud-dialog" aria-labelledby="end-confirm-title">
+    <div class="hud-dialog-inner">
+      <div class="panel-title warn" id="end-confirm-title">Terminate Simulation?</div>
+      <p class="hud-dialog-copy">End the live interview now and compile your performance debrief from the current transcript?</p>
+      <form method="dialog" class="hud-dialog-actions">
+        <button type="submit" value="cancel" class="btn-ghost" autofocus>Continue Interview</button>
+        <button type="submit" value="confirm" class="btn-ghost danger">Terminate &amp; Analyse</button>
+      </form>
+    </div>
+  </dialog>
+
+  <script src="config.js"></script>
+  <script src="reactor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
